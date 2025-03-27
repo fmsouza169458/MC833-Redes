@@ -12,12 +12,11 @@
 #include <sys/wait.h>
 #include <signal.h>
 
-#define PORT "3490"  // A porta em que os usuários se conectarão
-#define BACKLOG 10   // Quantas conexões pendentes serão mantidas na fila
+#define PORT "3490"
+#define BACKLOG 10
 #define BUFFER_SIZE 5000
 #define FILENAME "filmes.csv"
 
-// Função para enviar mensagens de texto através de um socket
 void send_message(int sockfd, const char *message) {
     size_t len = strlen(message);
     ssize_t total_sent = 0;
@@ -31,13 +30,27 @@ void send_message(int sockfd, const char *message) {
     }
 }
 
-// Função para lidar com os filhos zumbis
-void sigchld_handler(int s) {
-    (void)s; // Evitar o warning sobre argumento não utilizado
-    while(waitpid(-1, NULL, WNOHANG) > 0);
+void send_formatted_movie(int sockfd, const char *id, const char *title, const char *genre, const char *director) {
+    char buffer[512];
+    snprintf(buffer, sizeof(buffer), 
+             "-----------------------------------------\n"
+             "🎬  ID: %s\n"
+             "📌  Title: %s\n"
+             "🎭  Genre: %s\n"
+             "🎬  Director: %s\n"
+             "-----------------------------------------\n",
+             id, title, genre, director);
+    send_message(sockfd, buffer);
 }
 
-// Recupera endereço, IPv4 ou IPv6
+void sigchld_handler(int s) {
+    int saved_errno = errno;
+
+    while(waitpid(-1, NULL, WNOHANG) > 0);
+
+    errno = saved_errno;
+}
+
 void *get_in_addr(struct sockaddr *sa) {
     if(sa->sa_family == AF_INET) {
         return &(((struct sockaddr_in*)sa)->sin_addr);
@@ -45,7 +58,6 @@ void *get_in_addr(struct sockaddr *sa) {
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-// Função para adicionar um novo filme
 void write_movie(const char* params, int sockfd) {
     FILE *file = fopen(FILENAME, "a");
     if (file == NULL) {
@@ -54,17 +66,34 @@ void write_movie(const char* params, int sockfd) {
         return;
     }
 
+    char buffer[512];
+    strncpy(buffer, params, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0'; 
+
+    char *saveptr;
+    char *movie = strtok_r(buffer, ",", &saveptr);
+    char *genre = strtok_r(NULL, ",", &saveptr);
+    char *director = strtok_r(NULL, ",", &saveptr);
+
+    if (!movie || !genre || !director) {
+        send_message(sockfd, "Erro: Formato inválido. Use: Filme, Gênero, Diretor\n");
+        return;
+    }
+
+    while (*movie == ' ') movie++;
+    while (*genre == ' ') genre++;
+    while (*director == ' ') director++;
+
     uuid_t uuid;
     uuid_generate_random(uuid);
-    char uuidtext[37]; // 36 caracteres + '\0' para o terminador nulo
+    char uuidtext[37];
     uuid_unparse(uuid, uuidtext);
 
-    fprintf(file, "%s,%s\n", uuidtext, params);
+    fprintf(file, "\"%s\",\"%s\",\"%s\",\"%s\"\n", uuidtext, movie, genre, director);
     fclose(file);
     send_message(sockfd, "Filme adicionado com sucesso.\n");
 }
 
-// Função para adicionar um novo gênero ao filme
 void add_genre(const char* params, int sockfd) {
     char *params_copy = strdup(params);
     if (params_copy == NULL) {
@@ -117,7 +146,6 @@ void add_genre(const char* params, int sockfd) {
     }
 }
 
-// Função para remover um filme pelo identificador
 void remove_movie(const char* id, int sockfd) {
     FILE *file = fopen(FILENAME, "r");
     FILE *tmp = fopen("tmp_filmes.csv", "w");
@@ -152,7 +180,6 @@ void remove_movie(const char* id, int sockfd) {
     }
 }
 
-// Função para listar todos os títulos de filmes com seus identificadores
 void list_movie_titles(int sockfd) {
     FILE *file = fopen(FILENAME, "r");
     if (file == NULL) {
@@ -161,22 +188,23 @@ void list_movie_titles(int sockfd) {
         return;
     }
 
-    char line[256];
-    while (fgets(line, sizeof(line), file)) {
-        char *id = strtok(line, ",");
-        char *title = strtok(NULL, ",");
+    send_message(sockfd, "=== LISTA DE FILMES ===\n");
 
-        if (title != NULL) {
-            send_message(sockfd, id);
-            send_message(sockfd, ": ");
-            send_message(sockfd, title);
-            send_message(sockfd, "\n");
+    char line[512];
+    while (fgets(line, sizeof(line), file)) {
+        char *saveptr;
+        char *id = strtok_r(line, ",", &saveptr);
+        char *title = strtok_r(NULL, ",", &saveptr);
+
+        if (id && title) {
+            char buffer[256];
+            snprintf(buffer, sizeof(buffer), "🎬 %s - %s\n", id, title);
+            send_message(sockfd, buffer);
         }
     }
     fclose(file);
 }
 
-// Função para listar informações de todos os filmes
 void list_all_movies(int sockfd) {
     FILE *file = fopen(FILENAME, "r");
     if (file == NULL) {
@@ -185,14 +213,21 @@ void list_all_movies(int sockfd) {
         return;
     }
 
-    char line[256];
+    send_message(sockfd, "=== LISTA COMPLETA DE FILMES ===\n");
+
+    char line[512];
     while (fgets(line, sizeof(line), file)) {
-        send_message(sockfd, line);
+        char *saveptr;
+        char *id = strtok_r(line, ",", &saveptr);
+        char *title = strtok_r(NULL, ",", &saveptr);
+        char *genre = strtok_r(NULL, ",", &saveptr);
+        char *director = strtok_r(NULL, ",", &saveptr);
+
+        send_formatted_movie(sockfd, id, title, genre, director);
     }
     fclose(file);
 }
 
-// Função para listar informações de um filme específico
 void list_movie_details(const char* id, int sockfd) {
     FILE *file = fopen(FILENAME, "r");
     if (file == NULL) {
@@ -201,13 +236,19 @@ void list_movie_details(const char* id, int sockfd) {
         return;
     }
 
-    char line[256];
+    char line[512];
     int found = 0;
     while (fgets(line, sizeof(line), file)) {
-        char *csv_id = strtok(line, ",");
-        if (strcmp(id, csv_id) == 0) {
+        char *saveptr;
+        char *csv_id = strtok_r(line, ",", &saveptr);
+        char *title = strtok_r(NULL, ",", &saveptr);
+        char *genre = strtok_r(NULL, ",", &saveptr);
+        char *director = strtok_r(NULL, ",", &saveptr);
+
+        if (csv_id && title && genre && director && strcmp(id, csv_id) == 0) {
             found = 1;
-            send_message(sockfd, line);
+            send_message(sockfd, "=== DETALHES DO FILME ===\n");
+            send_formatted_movie(sockfd, csv_id, title, genre, director);
             break;
         }
     }
@@ -218,7 +259,7 @@ void list_movie_details(const char* id, int sockfd) {
     }
 }
 
-// Função para listar todos os filmes de um determinado gênero
+
 void list_movies_by_genre(const char* genre, int sockfd) {
     FILE *file = fopen(FILENAME, "r");
     if (file == NULL) {
@@ -227,16 +268,21 @@ void list_movies_by_genre(const char* genre, int sockfd) {
         return;
     }
 
-    char line[256];
+    send_message(sockfd, "=== FILMES POR GÊNERO ===\n");
+
+    char line[512];
     int found_some = 0;
     while (fgets(line, sizeof(line), file)) {
-        char *csv_id = strtok(line, ",");
-        strtok(NULL, " "); // Ignora o espaço após a vírgula
-        char *csv_genre = strtok(NULL, ",");
+        char *saveptr;
+        char *csv_id = strtok_r(line, ",", &saveptr);
+        char *title = strtok_r(NULL, ",", &saveptr);
+        char *csv_genre = strtok_r(NULL, ",", &saveptr);
+        char *director = strtok_r(NULL, ",", &saveptr);
 
-        if (csv_genre != NULL && strcmp(genre, csv_genre) == 0) {
+        printf("%s %s \n", csv_id, csv_genre);
+        if (strcmp(genre, csv_genre) == 0) {
             found_some = 1;
-            send_message(sockfd, line);
+            send_formatted_movie(sockfd, csv_id, title, csv_genre, director);
         }
     }
     fclose(file);
@@ -245,7 +291,6 @@ void list_movies_by_genre(const char* genre, int sockfd) {
         send_message(sockfd, "Nenhum filme encontrado para o gênero especificado.\n");
     }
 }
-
 // Função para lidar com a requisição
 void handle_request(int new_fd) {
     char buffer[BUFFER_SIZE];
@@ -263,17 +308,17 @@ void handle_request(int new_fd) {
 
     if (strcmp(operation, "write") == 0) {
         write_movie(params, new_fd);
-    } else if (strcmp(operation, "add_genre") == 0) {
+    } else if (strcmp(operation, "adicionar_genero") == 0) {
         add_genre(params, new_fd);
-    } else if (strcmp(operation, "remove") == 0) {
+    } else if (strcmp(operation, "remover") == 0) {
         remove_movie(params, new_fd);
-    } else if (strcmp(operation, "list_titles") == 0) {
+    } else if (strcmp(operation, "listar_titulos") == 0) {
         list_movie_titles(new_fd);
-    } else if (strcmp(operation, "list_all") == 0) {
+    } else if (strcmp(operation, "listar_tudo") == 0) {
         list_all_movies(new_fd);
-    } else if (strcmp(operation, "list_details") == 0) {
+    } else if (strcmp(operation, "listar_detalhes") == 0) {
         list_movie_details(params, new_fd);
-    } else if (strcmp(operation, "list_by_genre") == 0) {
+    } else if (strcmp(operation, "listar_por_genero") == 0) {
         list_movies_by_genre(params, new_fd);
     } else {
         send_message(new_fd, "Operação desconhecida.\n");
@@ -348,7 +393,7 @@ int main() {
 
     printf("server: aguardando por conexões...\n");
 
-    while (1) {
+    for(;;) {
         sin_size = sizeof their_addr;
         new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
         if (new_fd == -1) {

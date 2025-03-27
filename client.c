@@ -93,7 +93,6 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    // Recebendo a resposta completa
     receive_full_message(sockfd);
 
     close(sockfd);
