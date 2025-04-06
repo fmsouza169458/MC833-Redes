@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -16,6 +17,8 @@
 #define BACKLOG 10
 #define BUFFER_SIZE 5000
 #define FILENAME "filmes.csv"
+
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void send_message(int sockfd, const char *message) {
     size_t len = strlen(message);
@@ -30,7 +33,7 @@ void send_message(int sockfd, const char *message) {
     }
 }
 
-void send_formatted_movie(int sockfd, const char *id, const char *title, const char *genre, const char *director) {
+void send_formatted_movie(int sockfd, const char *id, const char *title, const char *genre, const char *director, const char *year) {
     char buffer[512];
     snprintf(buffer, sizeof(buffer), 
              "-----------------------------------------\n"
@@ -38,8 +41,9 @@ void send_formatted_movie(int sockfd, const char *id, const char *title, const c
              "📌  Title: %s\n"
              "🎭  Genre: %s\n"
              "🎬  Director: %s\n"
+             "📅  Year: %s\n"
              "-----------------------------------------\n",
-             id, title, genre, director);
+             id, title, genre, director, year);
     send_message(sockfd, buffer);
 }
 
@@ -59,10 +63,12 @@ void *get_in_addr(struct sockaddr *sa) {
 }
 
 void write_movie(const char* params, int sockfd) {
+    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "a");
     if (file == NULL) {
         perror("Erro ao abrir o arquivo");
         send_message(sockfd, "Erro ao abrir o arquivo.\n");
+        pthread_mutex_unlock(&file_mutex);
         return;
     }
 
@@ -74,23 +80,28 @@ void write_movie(const char* params, int sockfd) {
     char *movie = strtok_r(buffer, ",", &saveptr);
     char *genre = strtok_r(NULL, ",", &saveptr);
     char *director = strtok_r(NULL, ",", &saveptr);
+    char *year = strtok_r(NULL, ",", &saveptr);
 
-    if (!movie || !genre || !director) {
-        send_message(sockfd, "Erro: Formato inválido. Use: Filme, Gênero, Diretor\n");
+
+    if (!movie || !genre || !director || !year) {
+        send_message(sockfd, "Erro: Formato inválido. Use: Filme, Gênero, Diretor, Ano\n");
+        pthread_mutex_unlock(&file_mutex);
         return;
     }
 
     while (*movie == ' ') movie++;
     while (*genre == ' ') genre++;
     while (*director == ' ') director++;
+    while (*year == ' ') year++;
 
     uuid_t uuid;
     uuid_generate_random(uuid);
     char uuidtext[37];
     uuid_unparse(uuid, uuidtext);
 
-    fprintf(file, "\"%s\",\"%s\",\"%s\",\"%s\"\n", uuidtext, movie, genre, director);
+    fprintf(file, "%s,%s,%s,%s,%s\n", uuidtext, movie, genre, director,year);
     fclose(file);
+    pthread_mutex_unlock(&file_mutex);
     send_message(sockfd, "Filme adicionado com sucesso.\n");
 }
 
@@ -101,15 +112,16 @@ void add_genre(const char* params, int sockfd) {
         return;
     }
 
-    char *id = strtok(params_copy, ",");
+    char *name = strtok(params_copy, ",");
     char *new_genre = strtok(NULL, ",");
 
-    if (id == NULL || new_genre == NULL) {
+    if (name == NULL || new_genre == NULL) {
         send_message(sockfd, "Parâmetros inválidos.\n");
         free(params_copy);
         return;
     }
 
+    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "r");
     FILE *tmp = fopen("tmp_filmes.csv", "w");
 
@@ -117,6 +129,7 @@ void add_genre(const char* params, int sockfd) {
         perror("Erro ao abrir o arquivo");
         send_message(sockfd, "Erro ao abrir o arquivo.\n");
         free(params_copy);
+        pthread_mutex_unlock(&file_mutex);
         return;
     }
 
@@ -124,13 +137,16 @@ void add_genre(const char* params, int sockfd) {
     int found = 0;
     while (fgets(line, sizeof(line), file)) {
         char *csv_id = strtok(line, ",");
-        char *remainder = strtok(NULL, "\n");
+        char *csv_name = strtok(NULL, ",");  
+        char *csv_genre = strtok(NULL, ",");
+        char *csv_director = strtok(NULL, ",");
+        char *csv_year = strtok(NULL, "\n");
 
-        if (strcmp(id, csv_id) == 0) {
+        if (strcmp(name, csv_name) == 0) {
             found = 1;
-            fprintf(tmp, "%s,%s,%s\n", csv_id, new_genre, remainder);
+            fprintf(tmp, "%s,%s,%s,%s,%s\n", csv_id, csv_name, new_genre, csv_director,csv_year);
         } else {
-            fprintf(tmp, "%s,%s\n", csv_id, remainder);
+            fprintf(tmp, "%s,%s,%s,%s,%s\n", csv_id, csv_name, csv_genre, csv_year);
         }
     }
 
@@ -138,6 +154,7 @@ void add_genre(const char* params, int sockfd) {
     fclose(tmp);
     rename("tmp_filmes.csv", FILENAME);
     free(params_copy);
+    pthread_mutex_unlock(&file_mutex);
 
     if (found) {
         send_message(sockfd, "Gênero atualizado com sucesso.\n");
@@ -147,12 +164,14 @@ void add_genre(const char* params, int sockfd) {
 }
 
 void remove_movie(const char* id, int sockfd) {
+    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "r");
     FILE *tmp = fopen("tmp_filmes.csv", "w");
 
     if (file == NULL || tmp == NULL) {
         perror("Erro ao abrir o arquivo");
         send_message(sockfd, "Erro ao abrir o arquivo.\n");
+        pthread_mutex_unlock(&file_mutex);
         return;
     }
 
@@ -172,6 +191,7 @@ void remove_movie(const char* id, int sockfd) {
     fclose(file);
     fclose(tmp);
     rename("tmp_filmes.csv", FILENAME);
+    pthread_mutex_unlock(&file_mutex);
 
     if (found) {
         send_message(sockfd, "Filme removido com sucesso.\n");
@@ -181,6 +201,7 @@ void remove_movie(const char* id, int sockfd) {
 }
 
 void list_movie_titles(int sockfd) {
+    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "r");
     if (file == NULL) {
         perror("Erro ao abrir o arquivo");
@@ -203,13 +224,16 @@ void list_movie_titles(int sockfd) {
         }
     }
     fclose(file);
+    pthread_mutex_unlock(&file_mutex);
 }
 
 void list_all_movies(int sockfd) {
+    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "r");
     if (file == NULL) {
         perror("Erro ao abrir o arquivo");
         send_message(sockfd, "Erro ao abrir o arquivo.\n");
+        pthread_mutex_unlock(&file_mutex);
         return;
     }
 
@@ -222,17 +246,21 @@ void list_all_movies(int sockfd) {
         char *title = strtok_r(NULL, ",", &saveptr);
         char *genre = strtok_r(NULL, ",", &saveptr);
         char *director = strtok_r(NULL, ",", &saveptr);
+        char *year = strtok_r(NULL, ",", &saveptr);
 
-        send_formatted_movie(sockfd, id, title, genre, director);
+        send_formatted_movie(sockfd, id, title, genre, director, year);
     }
     fclose(file);
+    pthread_mutex_unlock(&file_mutex);
 }
 
 void list_movie_details(const char* id, int sockfd) {
+    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "r");
     if (file == NULL) {
         perror("Erro ao abrir o arquivo");
         send_message(sockfd, "Erro ao abrir o arquivo.\n");
+        pthread_mutex_unlock(&file_mutex);
         return;
     }
 
@@ -244,15 +272,17 @@ void list_movie_details(const char* id, int sockfd) {
         char *title = strtok_r(NULL, ",", &saveptr);
         char *genre = strtok_r(NULL, ",", &saveptr);
         char *director = strtok_r(NULL, ",", &saveptr);
+        char *year = strtok_r(NULL, ",", &saveptr);
 
         if (csv_id && title && genre && director && strcmp(id, csv_id) == 0) {
             found = 1;
             send_message(sockfd, "=== DETALHES DO FILME ===\n");
-            send_formatted_movie(sockfd, csv_id, title, genre, director);
+            send_formatted_movie(sockfd, csv_id, title, genre, director, year);
             break;
         }
     }
     fclose(file);
+    pthread_mutex_unlock(&file_mutex);
 
     if (!found) {
         send_message(sockfd, "Filme não encontrado.\n");
@@ -261,10 +291,12 @@ void list_movie_details(const char* id, int sockfd) {
 
 
 void list_movies_by_genre(const char* genre, int sockfd) {
+    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "r");
     if (file == NULL) {
         perror("Erro ao abrir o arquivo");
         send_message(sockfd, "Erro ao abrir o arquivo.\n");
+        pthread_mutex_unlock(&file_mutex);
         return;
     }
 
@@ -278,19 +310,21 @@ void list_movies_by_genre(const char* genre, int sockfd) {
         char *title = strtok_r(NULL, ",", &saveptr);
         char *csv_genre = strtok_r(NULL, ",", &saveptr);
         char *director = strtok_r(NULL, ",", &saveptr);
+        char *year = strtok_r(NULL, ",", &saveptr);
 
-        printf("%s %s \n", csv_id, csv_genre);
         if (strcmp(genre, csv_genre) == 0) {
             found_some = 1;
-            send_formatted_movie(sockfd, csv_id, title, csv_genre, director);
+            send_formatted_movie(sockfd, csv_id, title, csv_genre, director, year);
         }
     }
     fclose(file);
+    pthread_mutex_unlock(&file_mutex);
 
     if (!found_some) {
         send_message(sockfd, "Nenhum filme encontrado para o gênero especificado.\n");
     }
 }
+
 // Função para lidar com a requisição
 void handle_request(int new_fd) {
     char buffer[BUFFER_SIZE];
@@ -306,7 +340,7 @@ void handle_request(int new_fd) {
     char *operation = strtok(buffer, ":");
     char *params = strtok(NULL, ":");
 
-    if (strcmp(operation, "write") == 0) {
+    if (strcmp(operation, "adicionar_filme") == 0) {
         write_movie(params, new_fd);
     } else if (strcmp(operation, "adicionar_genero") == 0) {
         add_genre(params, new_fd);
