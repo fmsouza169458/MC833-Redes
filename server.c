@@ -112,10 +112,10 @@ void add_genre(const char* params, int sockfd) {
         return;
     }
 
-    char *name = strtok(params_copy, ",");
+    char *id = strtok(params_copy, ",");
     char *new_genre = strtok(NULL, ",");
 
-    if (name == NULL || new_genre == NULL) {
+    if (id == NULL || new_genre == NULL) {
         send_message(sockfd, "Parâmetros inválidos.\n");
         free(params_copy);
         return;
@@ -141,12 +141,12 @@ void add_genre(const char* params, int sockfd) {
         char *csv_genre = strtok(NULL, ",");
         char *csv_director = strtok(NULL, ",");
         char *csv_year = strtok(NULL, "\n");
-
-        if (strcmp(name, csv_name) == 0) {
+        
+        if (strcmp(id, csv_id) == 0) {
             found = 1;
             fprintf(tmp, "%s,%s,%s,%s,%s\n", csv_id, csv_name, new_genre, csv_director,csv_year);
         } else {
-            fprintf(tmp, "%s,%s,%s,%s,%s\n", csv_id, csv_name, csv_genre, csv_year);
+            fprintf(tmp, "%s,%s,%s,%s,%s\n", csv_id, csv_name, csv_genre, csv_director,csv_year);
         }
     }
 
