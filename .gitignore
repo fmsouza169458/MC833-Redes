@@ -1,2 +1,7 @@
 server
+<<<<<<< HEAD
 client
+=======
+client
+.vscode/*
+>>>>>>> b07ab84a4c7b927b0007f269823f61f77781a292

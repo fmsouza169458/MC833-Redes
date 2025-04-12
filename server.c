@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <pthread.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -17,6 +18,8 @@
 #define BACKLOG 10
 #define BUFFER_SIZE 5000
 #define FILENAME "filmes.csv"
+
+pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -141,12 +144,12 @@ void add_genre(const char* params, int sockfd) {
         char *csv_genre = strtok(NULL, ",");
         char *csv_director = strtok(NULL, ",");
         char *csv_year = strtok(NULL, "\n");
-
-        if (strcmp(name, csv_name) == 0) {
+        
+        if (strcmp(id, csv_id) == 0) {
             found = 1;
             fprintf(tmp, "%s,%s,%s,%s,%s\n", csv_id, csv_name, new_genre, csv_director,csv_year);
         } else {
-            fprintf(tmp, "%s,%s,%s,%s,%s\n", csv_id, csv_name, csv_genre, csv_year);
+            fprintf(tmp, "%s,%s,%s,%s,%s\n", csv_id, csv_name, csv_genre, csv_director,csv_year);
         }
     }
 
