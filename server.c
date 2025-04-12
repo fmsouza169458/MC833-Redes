@@ -13,13 +13,12 @@
 #include <uuid/uuid.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <fcntl.h>
 
 #define PORT "3490"
 #define BACKLOG 10
 #define BUFFER_SIZE 5000
 #define FILENAME "filmes.csv"
-
-pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -66,14 +65,6 @@ void *get_in_addr(struct sockaddr *sa) {
 }
 
 void write_movie(const char* params, int sockfd) {
-    pthread_mutex_lock(&file_mutex);
-    FILE *file = fopen(FILENAME, "a");
-    if (file == NULL) {
-        perror("Erro ao abrir o arquivo");
-        send_message(sockfd, "Erro ao abrir o arquivo.\n");
-        pthread_mutex_unlock(&file_mutex);
-        return;
-    }
 
     char buffer[512];
     strncpy(buffer, params, sizeof(buffer) - 1);
@@ -88,7 +79,6 @@ void write_movie(const char* params, int sockfd) {
 
     if (!movie || !genre || !director || !year) {
         send_message(sockfd, "Erro: Formato inválido. Use: Filme, Gênero, Diretor, Ano\n");
-        pthread_mutex_unlock(&file_mutex);
         return;
     }
 
@@ -102,9 +92,26 @@ void write_movie(const char* params, int sockfd) {
     char uuidtext[37];
     uuid_unparse(uuid, uuidtext);
 
+    struct flock lock = {0};
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    FILE *file = fopen(FILENAME, "a");
+    if (file == NULL) {
+        perror("Erro ao abrir o arquivo");
+        send_message(sockfd, "Erro ao abrir o arquivo.\n");
+        return;
+    }
+    int fd = fileno(file);
+if (fd == -1) {
+    perror("fileno");
+    exit(EXIT_FAILURE);
+}
+fcntl(fd, F_SETLK, &lock);
+
     fprintf(file, "%s,%s,%s,%s,%s\n", uuidtext, movie, genre, director,year);
+    lock.l_type = F_UNLCK;
+    fcntl(fd, F_SETLKW,&lock);
     fclose(file);
-    pthread_mutex_unlock(&file_mutex);
     send_message(sockfd, "Filme adicionado com sucesso.\n");
 }
 
@@ -124,7 +131,6 @@ void add_genre(const char* params, int sockfd) {
         return;
     }
 
-    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "r");
     FILE *tmp = fopen("tmp_filmes.csv", "w");
 
@@ -136,6 +142,16 @@ void add_genre(const char* params, int sockfd) {
         return;
     }
 
+    struct flock lock = {0};
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    int fd = fileno(file);
+if (fd == -1) {
+    perror("fileno");
+    exit(EXIT_FAILURE);
+}
+    fcntl(fd, F_SETLK, &lock);
+
     char line[256];
     int found = 0;
     while (fgets(line, sizeof(line), file)) {
@@ -145,19 +161,19 @@ void add_genre(const char* params, int sockfd) {
         char *csv_director = strtok(NULL, ",");
         char *csv_year = strtok(NULL, "\n");
         
-        if (strcmp(id, csv_id) == 0) {
+        if (strcmp(name, csv_name) == 0) {
             found = 1;
             fprintf(tmp, "%s,%s,%s,%s,%s\n", csv_id, csv_name, new_genre, csv_director,csv_year);
         } else {
             fprintf(tmp, "%s,%s,%s,%s,%s\n", csv_id, csv_name, csv_genre, csv_director,csv_year);
         }
     }
-
+    lock.l_type = F_UNLCK;
+    fcntl(fd, F_SETLKW,&lock);
     fclose(file);
     fclose(tmp);
     rename("tmp_filmes.csv", FILENAME);
     free(params_copy);
-    pthread_mutex_unlock(&file_mutex);
 
     if (found) {
         send_message(sockfd, "Gênero atualizado com sucesso.\n");
@@ -167,16 +183,24 @@ void add_genre(const char* params, int sockfd) {
 }
 
 void remove_movie(const char* id, int sockfd) {
-    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "r");
     FILE *tmp = fopen("tmp_filmes.csv", "w");
 
     if (file == NULL || tmp == NULL) {
         perror("Erro ao abrir o arquivo");
         send_message(sockfd, "Erro ao abrir o arquivo.\n");
-        pthread_mutex_unlock(&file_mutex);
         return;
     }
+
+    struct flock lock = {0};
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    int fd = fileno(file);
+if (fd == -1) {
+    perror("fileno");
+    exit(EXIT_FAILURE);
+}
+    fcntl(fd, F_SETLK, &lock);
 
     char line[256];
     int found = 0;
@@ -191,6 +215,8 @@ void remove_movie(const char* id, int sockfd) {
         }
     }
 
+    lock.l_type = F_UNLCK;
+    fcntl(fd, F_SETLKW,&lock);
     fclose(file);
     fclose(tmp);
     rename("tmp_filmes.csv", FILENAME);
@@ -214,6 +240,16 @@ void list_movie_titles(int sockfd) {
 
     send_message(sockfd, "=== LISTA DE FILMES ===\n");
 
+    struct flock lock = {0};
+    lock.l_type = F_RDLCK;
+    lock.l_whence = SEEK_SET;
+    int fd = fileno(file);
+if (fd == -1) {
+    perror("fileno");
+    exit(EXIT_FAILURE);
+}
+    fcntl(fd, F_SETLK, &lock);
+
     char line[512];
     while (fgets(line, sizeof(line), file)) {
         char *saveptr;
@@ -226,6 +262,8 @@ void list_movie_titles(int sockfd) {
             send_message(sockfd, buffer);
         }
     }
+    lock.l_type = F_UNLCK;
+    fcntl(fd, F_SETLKW,&lock);
     fclose(file);
     pthread_mutex_unlock(&file_mutex);
 }
@@ -241,6 +279,15 @@ void list_all_movies(int sockfd) {
     }
 
     send_message(sockfd, "=== LISTA COMPLETA DE FILMES ===\n");
+    struct flock lock = {0};
+    lock.l_type = F_RDLCK;
+    lock.l_whence = SEEK_SET;
+    int fd = fileno(file);
+if (fd == -1) {
+    perror("fileno");
+    exit(EXIT_FAILURE);
+}
+    fcntl(fd, F_SETLK, &lock);
 
     char line[512];
     while (fgets(line, sizeof(line), file)) {
@@ -253,6 +300,8 @@ void list_all_movies(int sockfd) {
 
         send_formatted_movie(sockfd, id, title, genre, director, year);
     }
+    lock.l_type = F_UNLCK;
+    fcntl(fd, F_SETLKW,&lock);
     fclose(file);
     pthread_mutex_unlock(&file_mutex);
 }
@@ -266,6 +315,16 @@ void list_movie_details(const char* id, int sockfd) {
         pthread_mutex_unlock(&file_mutex);
         return;
     }
+
+    struct flock lock = {0};
+    lock.l_type = F_RDLCK;
+    lock.l_whence = SEEK_SET;
+    int fd = fileno(file);
+if (fd == -1) {
+    perror("fileno");
+    exit(EXIT_FAILURE);
+}
+    fcntl(fd, F_SETLK, &lock);
 
     char line[512];
     int found = 0;
@@ -284,6 +343,8 @@ void list_movie_details(const char* id, int sockfd) {
             break;
         }
     }
+    lock.l_type = F_UNLCK;
+    fcntl(fd, F_SETLKW,&lock);
     fclose(file);
     pthread_mutex_unlock(&file_mutex);
 
@@ -302,6 +363,15 @@ void list_movies_by_genre(const char* genre, int sockfd) {
         pthread_mutex_unlock(&file_mutex);
         return;
     }
+    struct flock lock = {0};
+    lock.l_type = F_RDLCK;
+    lock.l_whence = SEEK_SET;
+    int fd = fileno(file);
+if (fd == -1) {
+    perror("fileno");
+    exit(EXIT_FAILURE);
+}
+    fcntl(fd, F_SETLK, &lock);
 
     send_message(sockfd, "=== FILMES POR GÊNERO ===\n");
 
@@ -320,6 +390,8 @@ void list_movies_by_genre(const char* genre, int sockfd) {
             send_formatted_movie(sockfd, csv_id, title, csv_genre, director, year);
         }
     }
+    fcntl(fd, F_SETLKW,&lock);
+    fclose(file);
     fclose(file);
     pthread_mutex_unlock(&file_mutex);
 
