@@ -5,8 +5,6 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <pthread.h>
-#include <pthread.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -20,7 +18,6 @@
 #define BUFFER_SIZE 5000
 #define FILENAME "filmes.csv"
 
-pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void send_message(int sockfd, const char *message) {
     size_t len = strlen(message);
@@ -115,7 +112,7 @@ fcntl(fd, F_SETLK, &lock);
     send_message(sockfd, "Filme adicionado com sucesso.\n");
 }
 
-void add_genre(const char* params, int sockfd) {
+void update_genre(const char* params, int sockfd) {
     char *params_copy = strdup(params);
     if (params_copy == NULL) {
         send_message(sockfd, "Erro ao alocar memória.\n");
@@ -138,7 +135,6 @@ void add_genre(const char* params, int sockfd) {
         perror("Erro ao abrir o arquivo");
         send_message(sockfd, "Erro ao abrir o arquivo.\n");
         free(params_copy);
-        pthread_mutex_unlock(&file_mutex);
         return;
     }
 
@@ -220,7 +216,6 @@ if (fd == -1) {
     fclose(file);
     fclose(tmp);
     rename("tmp_filmes.csv", FILENAME);
-    pthread_mutex_unlock(&file_mutex);
 
     if (found) {
         send_message(sockfd, "Filme removido com sucesso.\n");
@@ -230,7 +225,6 @@ if (fd == -1) {
 }
 
 void list_movie_titles(int sockfd) {
-    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "r");
     if (file == NULL) {
         perror("Erro ao abrir o arquivo");
@@ -265,16 +259,13 @@ if (fd == -1) {
     lock.l_type = F_UNLCK;
     fcntl(fd, F_SETLKW,&lock);
     fclose(file);
-    pthread_mutex_unlock(&file_mutex);
 }
 
 void list_all_movies(int sockfd) {
-    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "r");
     if (file == NULL) {
         perror("Erro ao abrir o arquivo");
         send_message(sockfd, "Erro ao abrir o arquivo.\n");
-        pthread_mutex_unlock(&file_mutex);
         return;
     }
 
@@ -303,16 +294,13 @@ if (fd == -1) {
     lock.l_type = F_UNLCK;
     fcntl(fd, F_SETLKW,&lock);
     fclose(file);
-    pthread_mutex_unlock(&file_mutex);
 }
 
 void list_movie_details(const char* id, int sockfd) {
-    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "r");
     if (file == NULL) {
         perror("Erro ao abrir o arquivo");
         send_message(sockfd, "Erro ao abrir o arquivo.\n");
-        pthread_mutex_unlock(&file_mutex);
         return;
     }
 
@@ -346,7 +334,6 @@ if (fd == -1) {
     lock.l_type = F_UNLCK;
     fcntl(fd, F_SETLKW,&lock);
     fclose(file);
-    pthread_mutex_unlock(&file_mutex);
 
     if (!found) {
         send_message(sockfd, "Filme não encontrado.\n");
@@ -355,12 +342,10 @@ if (fd == -1) {
 
 
 void list_movies_by_genre(const char* genre, int sockfd) {
-    pthread_mutex_lock(&file_mutex);
     FILE *file = fopen(FILENAME, "r");
     if (file == NULL) {
         perror("Erro ao abrir o arquivo");
         send_message(sockfd, "Erro ao abrir o arquivo.\n");
-        pthread_mutex_unlock(&file_mutex);
         return;
     }
     struct flock lock = {0};
@@ -392,8 +377,6 @@ if (fd == -1) {
     }
     fcntl(fd, F_SETLKW,&lock);
     fclose(file);
-    fclose(file);
-    pthread_mutex_unlock(&file_mutex);
 
     if (!found_some) {
         send_message(sockfd, "Nenhum filme encontrado para o gênero especificado.\n");
@@ -417,8 +400,8 @@ void handle_request(int new_fd) {
 
     if (strcmp(operation, "adicionar_filme") == 0) {
         write_movie(params, new_fd);
-    } else if (strcmp(operation, "adicionar_genero") == 0) {
-        add_genre(params, new_fd);
+    } else if (strcmp(operation, "atualizar_genero") == 0) {
+        update_genre(params, new_fd);
     } else if (strcmp(operation, "remover") == 0) {
         remove_movie(params, new_fd);
     } else if (strcmp(operation, "listar_titulos") == 0) {
